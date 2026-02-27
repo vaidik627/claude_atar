@@ -193,16 +193,92 @@ P&L FIELDS — HISTORICAL (3 values, oldest→newest)
   - If you CANNOT find D&A in any of the 4 locations, return [null, null, null]
   - Do NOT guess or copy EBITDA values into depreciation
 
-  capex_hist RULES — SEARCH ALL 4 LOCATIONS:
-  1. CASH FLOW STATEMENT: "Capital Expenditures", "Purchases of PP&E", "Additions to PP&E" (BEST source)
-  2. BALANCE SHEET: Change in "Net PP&E" + Depreciation ~= CapEx
-  3. MANAGEMENT DISCUSSION: "Capital spending", "Investment in facilities"
-  4. FOOTNOTES: "Property, Plant & Equipment" schedule showing additions
-  - Extract ANNUAL capital expenditure for EACH fiscal year separately
-  - Return as NEGATIVE numbers per year: e.g. [-535, -589, -424]
-  - VALIDATION: Annual CapEx is typically 0.3-5% of revenue
-  - If CapEx > 5% of revenue, verify it is annual not multi-year cumulative
-  - Do NOT sum multiple years together
+  ─────────────────────────────────────────────────────────────
+  CAPEX EXTRACTION RULES:
+  ─────────────────────────────────────────────────────────────
+
+  DEFINITION:
+    Capital Expenditures = cash spent to acquire or maintain
+    physical assets (PP&E). Always a cash OUTFLOW → always NEGATIVE.
+    Return as negative numbers: e.g. $535K CapEx → -535
+
+  STEP 1 — SEARCH LOCATIONS IN PRIORITY ORDER:
+
+    SOURCE 1 (highest priority): Cash Flow Statement — Investing Activities
+      Section heading: "Cash Flows from Investing Activities"
+      or "Investing Activities"
+      Find the line labeled:
+        "Capital Expenditures"
+        "Purchase of Property, Plant & Equipment"
+        "Purchases of PP&E"
+        "Acquisition of fixed assets"
+        "PP&E additions"
+      Extract the value for EVERY historical year column shown.
+      These values appear as negatives in the CFS — keep them negative.
+      If shown as positive in the CFS (some formats show outflows as positive),
+      negate them before returning.
+
+    SOURCE 2: Dedicated CapEx table or schedule
+      CIMs sometimes include a table titled:
+        "Capital Expenditure Summary"
+        "Historical CapEx"
+        "Maintenance and Growth CapEx"
+      If broken into "Maintenance CapEx" and "Growth CapEx":
+        Sum both: total_capex = -(maintenance + growth)
+      Extract ALL year columns from this table.
+
+    SOURCE 3: MD&A narrative text
+      Search for sentences containing:
+        "capital expenditures of $X"
+        "invested $X in capital expenditures"
+        "CapEx of $X million"
+        "PP&E purchases totaled $X"
+      Extract year and amount from the sentence.
+      Only use this source if Sources 1 and 2 are not found.
+
+    SOURCE 4 (projections only): Financial model / projection schedule
+      For projection years, look in:
+        "Financial Projections" section
+        "5-Year Model" or "3-Year Forecast" tables
+      Find the CapEx row in the projection table.
+      Extract ALL projection year columns — not just the last year.
+      If projection CapEx differs by year (e.g. -1400, -1000, -600),
+      extract each year's specific value, do not flatten to the last value.
+
+  STEP 2 — EXTRACTION RULES:
+
+    ARRAY COMPLETENESS:
+    If historical_years has 3 entries → capex_hist must have 3 values.
+    If projection_years has 5 entries → capex_proj must have 5 values.
+    Do not return [null, null, -424] when the CFS shows all 3 years.
+    Read all columns of the CapEx row, not just the last one.
+
+    SIGN CONVENTION:
+    CapEx must always be returned as NEGATIVE in this schema.
+    If the source document shows: CapEx $535K → return -535
+    If the source document shows: CapEx ($535K) → return -535
+    If the source document shows: CapEx -535 → return -535
+    Never return positive CapEx values.
+
+    NULL vs ZERO:
+    Return null ONLY if CapEx is completely absent from the document
+    after searching all 4 sources above.
+    Return 0 only if the document explicitly states $0 CapEx.
+    Never return 0 as a default or fallback.
+
+  STEP 3 — VALIDATION BEFORE RETURNING:
+    For each extracted value:
+    - Must be negative or null (never positive, never 0 as a default)
+    - For a company with $80-130M revenue: annual CapEx range = -$200K to -$5M
+      (0.2% to 4% of revenue). Outside this range: flag as uncertain.
+    - CapEx must not equal Depreciation exactly
+      (they can be similar but exact equality suggests a copy error)
+    - If capex_proj values are all identical flat numbers,
+      verify the projection table — they may differ by year
+
+  ─────────────────────────────────────────────────────────────
+  END CAPEX EXTRACTION RULES
+  ─────────────────────────────────────────────────────────────
 
   other_income_hist: "Other income", "Other expense" — non-operating items only
 
@@ -713,16 +789,190 @@ def derive_missing_values(data):
                 sources[f"depreciation_proj_{i}"] = "derived"
         f["depreciation_proj"] = dep_p
 
-    # --- DERIVE PROJECTION CAPEX from historical average ---
-    hist_capex_vals = [x for x in capex_h if x is not None and x != 0]
-    if hist_capex_vals:
-        avg_capex = round(sum(hist_capex_vals) / len(hist_capex_vals), 0)
-        for i in range(min(5, len(capex_p))):
-            if capex_p[i] is None and rev_p[i] is not None:
-                capex_p[i] = avg_capex
-                derivations.append(f"capex_proj[{i}] set to historical avg CapEx = {avg_capex}")
-                sources[f"capex_proj_{i}"] = "derived"
-        f["capex_proj"] = capex_p
+    # ══════════════════════════════════════════
+    # CAPEX DERIVATION — 4-METHOD FALLBACK CHAIN
+    # ══════════════════════════════════════════
+
+    def derive_capex(rev_arr, dep_arr, ebitda_arr, existing_capex_arr,
+                     is_projection=False):
+        """
+        Derives CapEx when not found in document.
+        Uses a 4-method chain in priority order.
+        All returned values are negative.
+
+        Returns: (derived_arr, method_used, confidence)
+        """
+        n = len(existing_capex_arr)
+        result = list(existing_capex_arr)
+        methods_used = []
+
+        # Identify which indices need derivation
+        missing_indices = [i for i in range(n) if result[i] is None]
+        if not missing_indices:
+            return result, "direct", "high"
+
+        # ── METHOD 1: Use known years to calculate CapEx/Revenue ratio ──
+        # Only valid if we have at least 1 known CapEx AND corresponding revenue
+        known_ratios = []
+        for i in range(n):
+            if result[i] is not None and rev_arr[i] is not None and rev_arr[i] > 0:
+                ratio = result[i] / rev_arr[i]  # will be negative
+                known_ratios.append(ratio)
+
+        if known_ratios:
+            avg_ratio = sum(known_ratios) / len(known_ratios)
+            for i in missing_indices:
+                if rev_arr[i] is not None and rev_arr[i] > 0:
+                    derived = round(avg_ratio * rev_arr[i], 0)
+                    result[i] = derived
+                    methods_used.append(
+                        f"capex[{i}] = avg_ratio({avg_ratio:.4f}) "
+                        f"* revenue({rev_arr[i]}) = {derived}"
+                    )
+            remaining = [i for i in missing_indices if result[i] is None]
+            if not remaining:
+                return result, "capex_revenue_ratio", "medium"
+            missing_indices = remaining
+
+        # ── METHOD 2: CapEx = most recent known CapEx value (flat) ──
+        # Use when we have some CapEx values but not all
+        known_capex = [v for v in result if v is not None]
+        if known_capex:
+            last_known = known_capex[-1]  # most recent known value
+            for i in missing_indices:
+                result[i] = last_known
+                methods_used.append(
+                    f"capex[{i}] = last_known_capex({last_known}) [flat]"
+                )
+            remaining = [i for i in missing_indices if result[i] is None]
+            if not remaining:
+                return result, "flat_last_known", "low"
+            missing_indices = remaining
+
+        # ── METHOD 3: CapEx = Depreciation * maintenance_ratio ──
+        # Asset-light companies: CapEx ~ 20-30% of Depreciation (maintenance only)
+        # Use 25% as conservative asset-light assumption
+        MAINTENANCE_RATIO = 0.25
+        for i in missing_indices:
+            if dep_arr[i] is not None and dep_arr[i] > 0:
+                derived = round(-dep_arr[i] * MAINTENANCE_RATIO, 0)
+                result[i] = derived
+                methods_used.append(
+                    f"capex[{i}] = -depr({dep_arr[i]}) * {MAINTENANCE_RATIO} = {derived}"
+                )
+        remaining = [i for i in missing_indices if result[i] is None]
+        if not remaining:
+            return result, "depreciation_ratio", "low"
+        missing_indices = remaining
+
+        # ── METHOD 4: CapEx = Revenue * industry_default_ratio ──
+        # Final fallback — 0.5% of revenue for asset-light/service companies
+        INDUSTRY_DEFAULT_RATIO = -0.005
+        for i in missing_indices:
+            if rev_arr[i] is not None and rev_arr[i] > 0:
+                derived = round(INDUSTRY_DEFAULT_RATIO * rev_arr[i], 0)
+                result[i] = derived
+                methods_used.append(
+                    f"capex[{i}] = revenue({rev_arr[i]}) * {INDUSTRY_DEFAULT_RATIO} = {derived}"
+                )
+        remaining = [i for i in missing_indices if result[i] is None]
+        if remaining:
+            # Cannot derive — leave as null
+            return result, "partial", "not_found"
+
+        return result, "industry_default", "very_low"
+
+    # ── Apply to historical CapEx ──────────────────────────────────
+    cap_h = f.get("capex_hist", [None] * 3)
+    has_null_hist = any(v is None for v in cap_h)
+    method_h = "direct"
+    if has_null_hist:
+        cap_h_derived, method_h, conf_h = derive_capex(
+            rev_arr=rev_h,
+            dep_arr=dep_h,
+            ebitda_arr=ebitda_h,
+            existing_capex_arr=cap_h,
+            is_projection=False
+        )
+        f["capex_hist"] = cap_h_derived
+        derivations.append(
+            f"capex_hist derived via [{method_h}]: {cap_h_derived}"
+        )
+        for i, orig in enumerate(cap_h):
+            key = f"capex_hist_{i}"
+            if orig is None and cap_h_derived[i] is not None:
+                sources[key] = f"derived:{method_h}"
+            elif orig is not None:
+                sources[key] = "direct"
+
+    # ── Apply to projection CapEx ──────────────────────────────────
+    cap_p = f.get("capex_proj", [None] * 5)
+    has_null_proj = any(v is None for v in cap_p)
+    method_p = "direct"
+    if has_null_proj:
+        cap_p_derived, method_p, conf_p = derive_capex(
+            rev_arr=rev_p,
+            dep_arr=dep_p,
+            ebitda_arr=ebitda_p,
+            existing_capex_arr=cap_p,
+            is_projection=True
+        )
+        f["capex_proj"] = cap_p_derived
+        derivations.append(
+            f"capex_proj derived via [{method_p}]: {cap_p_derived}"
+        )
+        for i, orig in enumerate(cap_p):
+            key = f"capex_proj_{i}"
+            if orig is None and cap_p_derived[i] is not None:
+                sources[key] = f"derived:{method_p}"
+            elif orig is not None:
+                sources[key] = "direct"
+
+    # ── Final sign validation ──────────────────────────────────────
+    # Ensure ALL CapEx values are negative after derivation
+    f["capex_hist"] = [
+        -abs(v) if v is not None and v != 0 else v
+        for v in f.get("capex_hist", [])
+    ]
+    f["capex_proj"] = [
+        -abs(v) if v is not None and v != 0 else v
+        for v in f.get("capex_proj", [])
+    ]
+
+    print(f"[CAPEX] hist={f['capex_hist']} method={method_h}")
+    print(f"[CAPEX] proj={f['capex_proj']} method={method_p}")
+
+    # ── DERIVE SGA PROJECTIONS from historical SGA/Revenue ratio ──
+    # When AI returns all-null sga_proj but we have historical SGA and projection revenue,
+    # apply the average historical SGA-to-Revenue ratio to each projection year.
+    sga_p = f.get("sga_proj", [None] * 5)
+    if all(v is None for v in sga_p):
+        # Calculate historical SGA/Revenue ratios from known years
+        hist_sga_ratios = []
+        for i in range(min(3, len(sga_h))):
+            if sga_h[i] is not None and rev_h[i] is not None and rev_h[i] > 0:
+                r = sga_h[i] / rev_h[i]
+                if 0.05 <= r <= 0.60:
+                    hist_sga_ratios.append(r)
+
+        if hist_sga_ratios:
+            avg_sga_ratio = sum(hist_sga_ratios) / len(hist_sga_ratios)
+            derived_count = 0
+            for i in range(min(5, len(sga_p))):
+                if rev_p[i] is not None and rev_p[i] > 0:
+                    derived_sga = round(avg_sga_ratio * rev_p[i], 0)
+                    sga_p[i] = derived_sga
+                    sources[f"sga_proj_{i}"] = "derived:hist_ratio"
+                    derived_count += 1
+            if derived_count > 0:
+                f["sga_proj"] = sga_p
+                derivations.append(
+                    f"sga_proj derived via [hist_ratio] avg={avg_sga_ratio:.4f}: {sga_p}")
+                print(f"[SGA_PROJ] Derived {derived_count} values using hist ratio {avg_sga_ratio:.4f}")
+        else:
+            print("[SGA_PROJ] Cannot derive — no valid historical SGA/Revenue ratios")
+    else:
+        print(f"[SGA_PROJ] Already has values: {sga_p}")
 
     # --- DERIVE ENTRY MULTIPLE from EV / EBITDA ---
     if d.get("entry_multiple") is None:
@@ -924,14 +1174,52 @@ def validate_and_correct(data):
             corrections.append(
                 f"purchase_price calculated: {ebitda_fp} x {mult} = {d['purchase_price_calculated']}")
 
-    # CHECK 11: CapEx sanity — annual CapEx typically 0.3-5% of revenue
-    capex_h = f.get("capex_hist", [None] * 3)
-    for i in range(min(3, len(capex_h))):
-        if rev_h[i] and capex_h[i] and capex_h[i] != 0:
-            ratio = abs(capex_h[i]) / rev_h[i]
-            if ratio > 0.10:
-                corrections.append(
-                    f"capex_hist[{i}] = {capex_h[i]} is {ratio:.1%} of revenue — may be cumulative")
+    # ── CAPEX VALIDATION ──────────────────────────────────────────
+    cap_h = f.get("capex_hist", [])
+    cap_p = f.get("capex_proj", [])
+    capex_warnings = []
+
+    for i, cap in enumerate(cap_h):
+        if cap is None:
+            continue
+        rev_val = rev_h[i] if i < len(rev_h) else None
+        dep_val = dep_h[i] if i < len(dep_h) else None
+
+        # Rule 1: Must be negative
+        if cap > 0:
+            f["capex_hist"][i] = -abs(cap)
+            corrections.append(f"capex_hist[{i}] was positive {cap}, negated to {-abs(cap)}")
+
+        # Rule 2: Reasonable range check (0.1% to 8% of revenue)
+        if rev_val and rev_val > 0:
+            ratio = abs(cap) / rev_val
+            if ratio > 0.08:
+                capex_warnings.append(
+                    f"capex_hist[{i}] = {cap} is {ratio:.1%} of revenue "
+                    f"— unusually high, verify"
+                )
+            elif ratio < 0.001 and abs(cap) > 0:
+                capex_warnings.append(
+                    f"capex_hist[{i}] = {cap} is {ratio:.1%} of revenue "
+                    f"— unusually low, verify"
+                )
+
+        # Rule 3: CapEx must not equal Depreciation (copy error check)
+        if dep_val is not None and abs(cap) == abs(dep_val):
+            capex_warnings.append(
+                f"capex_hist[{i}] = {cap} exactly equals depreciation "
+                f"— possible copy error"
+            )
+
+    for i, cap in enumerate(cap_p):
+        if cap is not None and cap > 0:
+            f["capex_proj"][i] = -abs(cap)
+            corrections.append(f"capex_proj[{i}] was positive {cap}, negated to {-abs(cap)}")
+
+    if capex_warnings:
+        data.setdefault("_warnings", []).extend(capex_warnings)
+        for w in capex_warnings:
+            print(f"[CAPEX WARNING] {w}")
 
     # CHECK 12: Projection SG&A sanity — same < 5% threshold as historical
     sga_p = f.get("sga_proj", [None] * 5)
@@ -990,6 +1278,8 @@ def post_process_extraction(raw_json):
                 d["enterprise_value"] = d["purchase_price_calculated"]
 
     # 2. Backfill adj_ebitda_hist from components if null
+    # IMPORTANT: Only backfill when adjustments are explicitly known (not null).
+    # Using adj=0 when null would produce EBITDA = GP - SGA = Operating Income, which is WRONG.
     rev = f.get("net_revenue_hist", [None]*3)
     gp = f.get("gross_profit_hist", [None]*3)
     sga = f.get("sga_hist", [None]*3)
@@ -997,9 +1287,8 @@ def post_process_extraction(raw_json):
     ebitda_hist = f.get("adj_ebitda_hist", [None]*3)
 
     for i in range(min(3, len(ebitda_hist))):
-        if ebitda_hist[i] is None and gp[i] is not None and sga[i] is not None:
-            adj_val = adj[i] or 0
-            ebitda_hist[i] = round(gp[i] - sga[i] + adj_val, 2)
+        if ebitda_hist[i] is None and gp[i] is not None and sga[i] is not None and adj[i] is not None:
+            ebitda_hist[i] = round(gp[i] - sga[i] + adj[i], 2)
     f["adj_ebitda_hist"] = ebitda_hist
 
     # 3. Calculate margins

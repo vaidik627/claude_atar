@@ -98,6 +98,30 @@ function pctCell(val) {
   return `<td>${fmtPct(val)}</td>`;
 }
 
+function capexCell(val, source) {
+  if (val === null || val === undefined) return '<td>--</td>';
+  const formatted = fmtMoney(val);
+  if (!source || source === 'direct') {
+    if (val < 0) return `<td class="negative">${formatted}</td>`;
+    return `<td>${formatted}</td>`;
+  }
+  const tooltip = getCapexMethodTooltip(source);
+  const badge = ` <span class="derived-badge" title="${tooltip}">(est.)</span>`;
+  if (val < 0) return `<td class="negative">${formatted}${badge}</td>`;
+  return `<td>${formatted}${badge}</td>`;
+}
+
+function getCapexMethodTooltip(source) {
+  const tooltips = {
+    'derived:capex_revenue_ratio': 'Estimated using CapEx-to-Revenue ratio from known years',
+    'derived:flat_last_known': 'Estimated using most recent known CapEx value (flat)',
+    'derived:depreciation_ratio': 'Estimated as 25% of Depreciation (maintenance assumption)',
+    'derived:industry_default': 'Estimated using 0.5% of Revenue industry default',
+    'derived': 'Estimated value — not directly from document'
+  };
+  return tooltips[source] || 'Estimated value — not directly from document';
+}
+
 // Helper to check if a field was derived
 function getSource(sources, key, index) {
   if (!sources) return null;
@@ -568,7 +592,7 @@ function renderHistoricalTable(fin, years, sources) {
     ${row('EBITDA Margin %', margin, pctCell, 'bold-row')}
     <tr class="separator-row"><td colspan="${n + 1}"></td></tr>
     ${row('Depreciation', dep, moneyCell, '', 'depreciation_hist')}
-    ${row('CapEx', capex, moneyCell, '', 'capex_hist')}
+    ${row('CapEx', capex, capexCell, '', 'capex_hist')}
     ${staticRow('Net Income', Array(n).fill(null), 'Not in CIM')}
     ${staticRow('Free Cash Flow', Array(n).fill(null), 'See Model')}
   </tbody></table>`;
@@ -616,7 +640,7 @@ function renderProjectionsTable(fin, years, sources) {
     ${row('EBITDA Margin %', margin, pctCell, 'bold-row')}
     <tr class="separator-row"><td colspan="${n + 1}"></td></tr>
     ${row('Depreciation', dep, moneyCell, '', 'depreciation_proj')}
-    ${row('CapEx', capex, moneyCell, '', 'capex_proj')}
+    ${row('CapEx', capex, capexCell, '', 'capex_proj')}
     ${row('Mgmt Fees', mgmt, moneyCell)}
   </tbody></table>`;
 }

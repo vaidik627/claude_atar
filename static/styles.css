@@ -622,6 +622,15 @@ body {
   font-weight: 500;
 }
 
+.derived-badge {
+  font-size: 0.72em;
+  font-style: italic;
+  color: #f59e0b;
+  margin-left: 4px;
+  opacity: 0.85;
+  vertical-align: super;
+}
+
 .hint-text {
   color: var(--text-secondary);
   font-style: italic;
