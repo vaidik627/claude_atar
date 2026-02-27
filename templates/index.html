@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocAnalyzer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span class="logo-icon">&#9670;</span>
+        <span class="logo-text">DocAnalyzer</span>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-item active" data-page="dashboard">
+          <span class="nav-icon">&#9632;</span>
+          <span class="nav-text">Dashboard</span>
+        </a>
+        <a href="#" class="nav-item" data-page="upload">
+          <span class="nav-icon">&#8686;</span>
+          <span class="nav-text">Upload Doc</span>
+        </a>
+        <a href="#" class="nav-item" data-page="analysis">
+          <span class="nav-icon">&#9881;</span>
+          <span class="nav-text">Analysis</span>
+        </a>
+        <a href="#" class="nav-item" data-page="settings">
+          <span class="nav-icon">&#9881;</span>
+          <span class="nav-text">Settings</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-info">
+          <div class="user-avatar">U</div>
+          <span class="user-name">User</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Top Bar -->
+      <header class="topbar">
+        <button class="menu-toggle" id="menuToggle">&#9776;</button>
+        <h1 class="page-title" id="pageTitle">Dashboard</h1>
+      </header>
+
+      <!-- Pages -->
+      <div class="page-container">
+
+        <!-- Dashboard Page -->
+        <section class="page active" id="page-dashboard">
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-number" id="statTotal">0</div>
+              <div class="stat-label">Total Documents</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-number" id="statAnalyzed">0</div>
+              <div class="stat-label">Fully Analyzed</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-number" id="statPending">0</div>
+              <div class="stat-label">Pending</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-number" id="statAccuracy">0%</div>
+              <div class="stat-label">OCR Accuracy</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-number" id="statExtractionConf">0%</div>
+              <div class="stat-label">Extraction Confidence</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-number" id="statDealValue">$0</div>
+              <div class="stat-label">Total Deal Value</div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Recent Activity</h2>
+            <div class="activity-list" id="activityList">
+              <div class="activity-item">
+                <span class="activity-dot"></span>
+                <span>No recent activity yet.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Upload Doc Page -->
+        <section class="page" id="page-upload">
+          <div class="card">
+            <h2>Upload Document</h2>
+            <div class="upload-area" id="uploadArea">
+              <div class="upload-icon">&#8686;</div>
+              <p>Drag & drop your files here</p>
+              <p class="upload-hint">or click to browse</p>
+              <input type="file" id="fileInput" hidden multiple>
+            </div>
+            <div class="uploaded-files" id="uploadedFiles"></div>
+          </div>
+        </section>
+
+        <!-- Analysis Page -->
+        <section class="page" id="page-analysis">
+          <!-- Documents List View -->
+          <div id="analysisListView">
+            <div class="card">
+              <h2>Document Analysis</h2>
+              <div id="documentsList">
+                <p class="placeholder-text">Upload a document to start analysis.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Analysis Detail View (hidden by default) -->
+          <div id="analysisDetailView" style="display:none;">
+            <button class="btn-back" id="btnBackToList">&larr; Back to Documents</button>
+
+            <!-- Deal Header -->
+            <div class="deal-header" id="dealHeader">
+              <div class="deal-title">
+                <h2 id="dealCompanyName">Loading...</h2>
+                <span class="deal-subtitle" id="dealSubtitle"></span>
+              </div>
+              <div class="deal-badges">
+                <span class="confidence-badge" id="dealConfidence">--</span>
+                <span class="pipeline-badge" id="dealPipeline">--</span>
+                <span class="corrections-badge" id="correctionsBadge" style="display:none;" title=""></span>
+                <span class="derivations-badge" id="derivationsBadge" style="display:none;" title=""></span>
+              </div>
+            </div>
+
+            <!-- KPI Cards -->
+            <div class="kpi-grid" id="kpiGrid">
+              <div class="kpi-card">
+                <div class="kpi-label">Purchase Price</div>
+                <div class="kpi-value" id="kpiPurchasePrice">--</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Entry Multiple</div>
+                <div class="kpi-value" id="kpiEntryMultiple">--</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">LTM Revenue</div>
+                <div class="kpi-value" id="kpiRevenue">--</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">LTM EBITDA</div>
+                <div class="kpi-value" id="kpiEbitda">--</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Enterprise Value</div>
+                <div class="kpi-value" id="kpiEV">--</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Leverage Ratio</div>
+                <div class="kpi-value" id="kpiLeverage">--</div>
+              </div>
+            </div>
+
+            <!-- Data Integrity Warnings -->
+            <div class="integrity-warnings" id="integrityWarnings" style="display:none;">
+              <div class="warning-header" id="warningToggle">
+                <strong id="warningCount">0 data quality issues detected</strong> — click to review
+              </div>
+              <div class="warning-list" id="warningList" style="display:none;"></div>
+            </div>
+
+            <!-- Chart -->
+            <div class="card">
+              <h2>Revenue & EBITDA Trend</h2>
+              <div class="chart-container">
+                <canvas id="financialChart"></canvas>
+              </div>
+            </div>
+
+            <!-- Financial Tables -->
+            <div class="tables-row">
+              <div class="card table-half">
+                <h2>Historical Financials</h2>
+                <div id="historicalTable"></div>
+              </div>
+              <div class="card table-half">
+                <h2>Projections</h2>
+                <div id="projectionsTable"></div>
+              </div>
+            </div>
+
+            <!-- Collateral + Deal Structure side by side -->
+            <div class="tables-row">
+              <div class="card table-half">
+                <h2>Collateral & Security</h2>
+                <div id="collateralGrid">
+                  <p class="placeholder-text">No collateral data available.</p>
+                </div>
+              </div>
+              <div class="card table-half">
+                <h2>Deal Structure</h2>
+                <div id="dealStructureGrid"></div>
+              </div>
+            </div>
+
+            <!-- Key Highlights & Risks -->
+            <div class="tables-row">
+              <div class="card table-half">
+                <h2>Key Highlights</h2>
+                <ul class="highlights-list" id="highlightsList"></ul>
+              </div>
+              <div class="card table-half">
+                <h2>Risks</h2>
+                <ul class="risks-list" id="risksList"></ul>
+              </div>
+            </div>
+
+            <!-- Confidence Grid -->
+            <div class="card">
+              <h2>Extraction Confidence</h2>
+              <div class="confidence-grid" id="confidenceGrid"></div>
+            </div>
+
+            <!-- Field-Level Confidence -->
+            <div class="card">
+              <h2>Field Confidence</h2>
+              <div class="field-confidence-grid" id="fieldConfidenceGrid"></div>
+            </div>
+
+            <!-- Raw JSON -->
+            <div class="card">
+              <h2>Raw Extraction Data</h2>
+              <button class="btn-toggle-json" id="btnToggleJson">Show JSON</button>
+              <pre class="json-viewer" id="jsonViewer" style="display:none;"></pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- Settings Page -->
+        <section class="page" id="page-settings">
+          <div class="card">
+            <h2>Settings</h2>
+            <div class="settings-group">
+              <div class="setting-item">
+                <div>
+                  <div class="setting-label">Dark Mode</div>
+                  <div class="setting-desc">Toggle dark/light theme</div>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" id="darkModeToggle" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="setting-item">
+                <div>
+                  <div class="setting-label">Notifications</div>
+                  <div class="setting-desc">Enable desktop notifications</div>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" id="notificationsToggle">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="setting-item">
+                <div>
+                  <div class="setting-label">Auto-analyze on upload</div>
+                  <div class="setting-desc">Automatically analyze documents after uploading</div>
+                </div>
+                <label class="toggle">
+                  <input type="checkbox" id="autoAnalyzeToggle" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

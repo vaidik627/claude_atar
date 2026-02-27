@@ -1,0 +1,7 @@
+flask
+flask-cors
+google-cloud-documentai
+python-dotenv
+proto-plus
+pypdf
+openai

@@ -1,0 +1,8 @@
+.env
+*.json
+!package.json
+docanalyzer.db
+uploads/
+storage/
+__pycache__/
+*.pyc
